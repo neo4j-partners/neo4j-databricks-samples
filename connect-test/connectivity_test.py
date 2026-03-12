@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "neo4j",
+#     "neo4j>=5.20.0",
 #     "python-dotenv",
 # ]
 # ///
