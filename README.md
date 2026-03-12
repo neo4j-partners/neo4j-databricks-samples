@@ -35,15 +35,15 @@ If all tests pass locally, your credentials are valid and Neo4j is accepting con
 
 Once the local test passes, run the same tests from your Databricks cluster.
 
-1. Run the setup script to store credentials as Databricks secrets:
-   ```bash
-   cd connect-test
-   ./setup.sh
-   ```
+1. Configure credentials using **one** of these options:
+   - **Databricks Secrets**: Run the setup script to store credentials as secrets, then use Option A in the notebook:
+     ```bash
+     cd connect-test
+     ./setup.sh
+     ```
+   - **Direct values**: Skip the setup script and uncomment Option B in the notebook's configuration cell, entering your credentials directly.
 
-2. Install the `neo4j` Python package on your cluster (or add `%pip install neo4j` to the notebook).
-
-3. Import and run `connect-test/neo4j_connectivity_test.ipynb` in Databricks.
+2. Import and run `connect-test/neo4j_connectivity_test.ipynb` in Databricks.
 
 ### Serverless Compute
 
@@ -52,8 +52,6 @@ The `neo4j` Python package is not pre-installed on serverless. Install it via th
 ```python
 %pip install neo4j
 ```
-
-> **Do not** install `pyspark` or any library that pulls in `pyspark` — this will crash the serverless session.
 
 #### Section compatibility
 
