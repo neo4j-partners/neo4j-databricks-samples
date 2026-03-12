@@ -35,7 +35,7 @@ NEO4J_HOST = os.getenv("NEO4J_HOST")
 NEO4J_USER = os.getenv("NEO4J_USER")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
-NEO4J_BOLT_URI = f"neo4j+s://{NEO4J_HOST}"
+NEO4J_URI = f"neo4j+s://{NEO4J_HOST}"
 
 # Validate required variables
 missing = [v for v in ("NEO4J_HOST", "NEO4J_USER", "NEO4J_PASSWORD") if not os.getenv(v)]
@@ -101,14 +101,14 @@ def test_python_driver():
     print("\n" + "=" * 60)
     print("TEST: Neo4j Python Driver")
     print("=" * 60)
-    print(f"\nTarget: {NEO4J_BOLT_URI}")
+    print(f"\nTarget: {NEO4J_URI}")
     print("Testing: Can we authenticate and execute queries via Bolt protocol?")
 
     from neo4j import GraphDatabase
 
     try:
         start_time = time.time()
-        driver = GraphDatabase.driver(NEO4J_BOLT_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
         # Verify connectivity
         driver.verify_connectivity()
@@ -137,7 +137,7 @@ def test_python_driver():
         driver.close()
 
         print(f"\nConnection Details:")
-        print(f"  - URI: {NEO4J_BOLT_URI}")
+        print(f"  - URI: {NEO4J_URI}")
         print(f"  - User: {NEO4J_USER}")
         print(f"  - Database: {NEO4J_DATABASE}")
         print(f"  - Neo4j Server: {', '.join(neo4j_info)}")
@@ -161,7 +161,7 @@ def test_python_driver():
 def main():
     print(f"\nConfiguration loaded from {env_path}:")
     print(f"  Neo4j Host: {NEO4J_HOST}")
-    print(f"  Bolt URI: {NEO4J_BOLT_URI}")
+    print(f"  Neo4j URI: {NEO4J_URI}")
     print()
 
     test_environment()
