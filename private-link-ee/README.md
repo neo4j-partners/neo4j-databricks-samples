@@ -234,11 +234,12 @@ uv run setup-private-link
 uv run teardown-private-link
 ```
 
-Removes all three Private Link resources in dependency order:
+Removes all Private Link resources in dependency order:
 1. VMSS removed from internal LB backend pool
-2. Private Link Service deleted
-3. Internal Load Balancer deleted
-4. NAT subnet deleted
+2. Private endpoint connections deleted (active connections block PLS deletion)
+3. Private Link Service deleted
+4. Internal Load Balancer deleted
+5. NAT subnet deleted
 
 The Neo4j marketplace deployment is unchanged.
 
@@ -284,9 +285,6 @@ The connection was denied instead of approved. Delete the NCC rule, re-create it
 - Verify the domain name in the NCC rule matches the URI in the notebook
 - Verify the NCC is attached to the workspace
 - Wait 10 minutes after attaching/updating the NCC, then restart serverless compute
-
-**Teardown fails on subnet deletion**
-The NAT subnet can't be deleted while the Private Link Service exists. Ensure PLS deletion succeeded before subnet deletion. If the PLS deletion timed out, delete it manually: `az network private-link-service delete --resource-group <RG> --name neo4j-pls`
 
 **"You don't have access" in Azure portal**
 When clicking the private endpoint link on the PLS connections page, Azure navigates to the Databricks-managed subscription in Microsoft's tenant. This is expected. You don't need access there. Use `uv run approve-private-link` to approve from your side.

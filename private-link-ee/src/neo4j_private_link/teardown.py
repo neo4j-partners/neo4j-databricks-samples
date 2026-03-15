@@ -11,6 +11,7 @@ Usage:
 
 from neo4j_private_link.helpers import (
     az,
+    discover_pls_connections,
     discover_vmss,
     load_env,
     optional_env,
@@ -89,20 +90,33 @@ def main():
     print(f"\nStep 2: Remove VMSS from {LB_NAME} backend pool")
     remove_vmss_from_backend_pool(info)
 
-    # Step 3: Delete Private Link Service
-    print(f"\nStep 3: Delete Private Link Service ({PLS_NAME})")
+    # Step 3: Remove private endpoint connections (blocks PLS deletion)
+    print(f"\nStep 3: Remove private endpoint connections on {PLS_NAME}")
+    connections = discover_pls_connections(resource_group, PLS_NAME)
+    if connections:
+        for conn in connections:
+            print(f"  Deleting connection: {conn['name']} (status: {conn['status']})")
+            az(["network", "private-link-service", "connection", "delete",
+                "--resource-group", resource_group,
+                "--service-name", PLS_NAME,
+                "--name", conn["name"]], check=False)
+    else:
+        print("  No connections found.")
+
+    # Step 4: Delete Private Link Service
+    print(f"\nStep 4: Delete Private Link Service ({PLS_NAME})")
     az(["network", "private-link-service", "delete",
         "--resource-group", resource_group,
         "--name", PLS_NAME], check=False)
 
-    # Step 4: Delete Internal Load Balancer
-    print(f"\nStep 4: Delete Internal Load Balancer ({LB_NAME})")
+    # Step 5: Delete Internal Load Balancer
+    print(f"\nStep 5: Delete Internal Load Balancer ({LB_NAME})")
     az(["network", "lb", "delete",
         "--resource-group", resource_group,
         "--name", LB_NAME], check=False)
 
-    # Step 5: Delete NAT Subnet
-    print(f"\nStep 5: Delete NAT Subnet ({NAT_SUBNET_NAME})")
+    # Step 6: Delete NAT Subnet
+    print(f"\nStep 6: Delete NAT Subnet ({NAT_SUBNET_NAME})")
     az(["network", "vnet", "subnet", "delete",
         "--resource-group", resource_group,
         "--vnet-name", info["vnet_name"],
