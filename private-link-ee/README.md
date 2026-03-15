@@ -50,7 +50,7 @@ Traffic flow: Notebook ──► NCC Private Endpoint ──► Private Link Ser
 
 - **Azure CLI** with Bicep support (`az bicep version`; [install](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli))
 - **uv** ([install](https://docs.astral.sh/uv/getting-started/installation/))
-- **Databricks CLI** ([install](https://docs.databricks.com/dev-tools/cli/install.html)), used by `attach-ncc.py` and `setup-secrets.sh` for authentication
+- **Databricks CLI** ([install](https://docs.databricks.com/dev-tools/cli/install.html)), used by `attach-ncc` and `setup-secrets.sh` for authentication
 - **Neo4j EE marketplace deployment**, a running 3-node cluster deployed from the [Azure Marketplace](https://azuremarketplace.microsoft.com/en-us/marketplace/apps/neo4j.neo4j-ee)
 - **Databricks workspace** in the same Azure region as the Neo4j cluster
 - **Azure permissions**: Contributor on the resource group containing the Neo4j deployment
@@ -58,7 +58,7 @@ Traffic flow: Notebook ──► NCC Private Endpoint ──► Private Link Ser
 
 ### Databricks CLI Profile Setup
 
-The `attach-ncc.py` script uses a Databricks CLI profile to authenticate with the account console. Set up a profile in `~/.databrickscfg`:
+The `attach-ncc` command uses a Databricks CLI profile to authenticate with the account console. Set up a profile in `~/.databrickscfg`:
 
 ```ini
 [azure-account-admin]
@@ -86,33 +86,33 @@ cd private-link-ee
 
 # 1. Interactive setup: asks for resource group and Neo4j password,
 #    discovers everything else, writes .env
-uv run setup-private-link.py --init
+uv run setup-private-link --init
 
 # 2. Deploy Private Link infrastructure
-uv run setup-private-link.py
+uv run setup-private-link
 
 # 3. Verify resources were created
-uv run verify-private-link.py
+uv run verify-private-link
 
 # 4. Create NCC private endpoint rule in Databricks (see setup output)
 
 # 5. Approve the pending connection
-uv run approve-private-link.py
+uv run approve-private-link
 
 # 6. Attach the NCC to your workspace
-uv run attach-ncc.py --profile azure-account-admin
+uv run attach-ncc --profile azure-account-admin
 
 # 7. Store secrets and test from a notebook
 ./setup-secrets.sh <databricks-cli-profile>
 
 # 8. When done, tear down
-uv run teardown-private-link.py
-uv run verify-private-link.py --cleanup
+uv run teardown-private-link
+uv run verify-private-link --cleanup
 ```
 
 ## Configuration
 
-Run `uv run setup-private-link.py --init` to create `.env` interactively, or copy `.env.sample` to `.env` and fill in values manually:
+Run `uv run setup-private-link --init` to create `.env` interactively, or copy `.env.sample` to `.env` and fill in values manually:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -127,7 +127,7 @@ Run `uv run setup-private-link.py --init` to create `.env` interactively, or cop
 | `DATABRICKS_ACCOUNT_ID` | No | Pre-fills the NCC API curl command in setup output |
 | `NCC_ID` | No | NCC UUID; copy from the browser URL when viewing the NCC in the account console |
 | `NEO4J_DOMAIN` | No | Domain name for the NCC private endpoint rule |
-| `DATABRICKS_WORKSPACE_ID` | No | Workspace ID for `attach-ncc.py` (prompted if not set) |
+| `DATABRICKS_WORKSPACE_ID` | No | Workspace ID for `attach-ncc` (prompted if not set) |
 | `DATABRICKS_ACCOUNT_TOKEN` | No | Account admin token (prompted if not set) |
 
 Only `RESOURCE_GROUP` is required. Everything else is discovered automatically or has defaults.
@@ -139,7 +139,7 @@ Only `RESOURCE_GROUP` is required. Everything else is discovered automatically o
 ```bash
 # Interactive setup: asks for resource group and Neo4j password,
 # discovers VMSS, VNet, subnet, region, and Neo4j URI automatically
-uv run setup-private-link.py --init
+uv run setup-private-link --init
 ```
 
 This creates `.env` with all discovered values. Verify prerequisites are met:
@@ -152,7 +152,7 @@ az bicep version
 ### Step 2: Deploy Private Link Infrastructure
 
 ```bash
-uv run setup-private-link.py
+uv run setup-private-link
 ```
 
 The script runs four phases:
@@ -165,7 +165,7 @@ The script runs four phases:
 Verify the resources were created:
 
 ```bash
-uv run verify-private-link.py
+uv run verify-private-link
 ```
 
 ### Step 3: Create NCC Private Endpoint Rule
@@ -183,7 +183,7 @@ Use the curl command printed by the setup script, or create the rule in the Data
 ### Step 4: Approve the Connection
 
 ```bash
-uv run approve-private-link.py
+uv run approve-private-link
 ```
 
 The script finds pending private endpoint connections on `neo4j-pls` and approves them. This replaces the manual Azure portal approval step.
@@ -195,7 +195,7 @@ Wait for the NCC status in Databricks to change to **ESTABLISHED** (up to 10 min
 ### Step 5: Attach NCC to Workspace
 
 ```bash
-uv run attach-ncc.py --profile azure-account-admin
+uv run attach-ncc --profile azure-account-admin
 ```
 
 The script prompts for your workspace ID and attaches the NCC via the Databricks Account API. Uses the Databricks CLI profile for authentication. Requires `DATABRICKS_ACCOUNT_ID` and `NCC_ID` in `.env`.
@@ -221,14 +221,14 @@ Uses `neo4j://` (not `neo4j+s://`) because traffic travels over the Azure backbo
 Re-running the setup script is safe. It skips the VMSS update if the backend pool is already attached, and Bicep handles infrastructure idempotency:
 
 ```bash
-uv run setup-private-link.py
+uv run setup-private-link
 # Should see: "VMSS ... already in internal LB backend pool. Skipping."
 ```
 
 ### Step 8: Teardown
 
 ```bash
-uv run teardown-private-link.py
+uv run teardown-private-link
 ```
 
 Removes all three Private Link resources in dependency order:
@@ -242,7 +242,7 @@ The Neo4j marketplace deployment is unchanged.
 Verify cleanup:
 
 ```bash
-uv run verify-private-link.py --cleanup
+uv run verify-private-link --cleanup
 ```
 
 **Note:** The NCC private endpoint rule in Databricks is not removed by the teardown script. Delete it manually in the Databricks account console if no longer needed.
@@ -256,7 +256,7 @@ The setup script looks for a VMSS with name prefix `vmss-neo4j-`. Verify the VMS
 If the NAT subnet `10.1.0.0/24` overlaps with an existing subnet, change `PLS_SUBNET_PREFIX` in `.env`.
 
 **NCC status stays PENDING**
-The connection must be approved (Step 4). Run `uv run approve-private-link.py` to find and approve pending connections.
+The connection must be approved (Step 4). Run `uv run approve-private-link` to find and approve pending connections.
 
 **NCC status is REJECTED**
 The connection was denied instead of approved. Delete the NCC rule, re-create it, and approve the new connection.
@@ -271,7 +271,7 @@ The connection was denied instead of approved. Delete the NCC rule, re-create it
 The NAT subnet can't be deleted while the Private Link Service exists. Ensure PLS deletion succeeded before subnet deletion. If the PLS deletion timed out, delete it manually: `az network private-link-service delete --resource-group <RG> --name neo4j-pls`
 
 **"You don't have access" in Azure portal**
-When clicking the private endpoint link on the PLS connections page, Azure navigates to the Databricks-managed subscription in Microsoft's tenant. This is expected. You don't need access there. Use `uv run approve-private-link.py` to approve from your side.
+When clicking the private endpoint link on the PLS connections page, Azure navigates to the Databricks-managed subscription in Microsoft's tenant. This is expected. You don't need access there. Use `uv run approve-private-link` to approve from your side.
 
 ## Architecture
 
@@ -328,7 +328,7 @@ Only port 7687 traverses Private Link. The public LB and Neo4j Browser remain ac
 
 ### Security Boundaries
 
-- **Private Link Service visibility** is set to `*` (all subscriptions can request connections), but **auto-approval is disabled**. Every connection requires explicit approval via `approve-private-link.py` or the Azure portal.
+- **Private Link Service visibility** is set to `*` (all subscriptions can request connections), but **auto-approval is disabled**. Every connection requires explicit approval via `uv run approve-private-link` or the Azure portal.
 - **No public internet exposure.** Driver traffic from Databricks never leaves the Azure backbone.
 - **Neo4j credentials** are stored in a Databricks secret scope, not in notebook code.
 - **`neo4j://` (not `neo4j+s://`)** is used because the network path is private. TLS between driver and server is optional when traffic doesn't traverse the public internet.
@@ -341,12 +341,14 @@ private-link-ee/
   NCC_EE.md                      # Architecture and manual steps
   PRIVATE_LINK.md                # Design proposal and progress log
   private-link.bicep             # Bicep template (internal LB, NAT subnet, PLS)
-  private_link_helpers.py        # Shared module: az wrapper, discovery, env loading
-  setup-private-link.py          # Setup: discover, deploy Bicep, wire VMSS
-  approve-private-link.py        # Approve pending private endpoint connections
-  attach-ncc.py                  # Attach NCC to a Databricks workspace
-  verify-private-link.py         # Verify resources exist or cleanup is complete
-  teardown-private-link.py       # Teardown: remove PLS, LB, subnet
+  pyproject.toml                 # Package definition and script entry points
+  src/neo4j_private_link/        # Python package
+    helpers.py                   # Shared module: az wrapper, discovery, env loading
+    setup.py                     # Setup: discover, deploy Bicep, wire VMSS
+    approve.py                   # Approve pending private endpoint connections
+    attach_ncc.py                # Attach NCC to a Databricks workspace
+    verify.py                    # Verify resources exist or cleanup is complete
+    teardown.py                  # Teardown: remove PLS, LB, subnet
   setup-secrets.sh               # Store Neo4j credentials in Databricks secrets
   neo4j_private_link_test.ipynb  # Test notebook for Databricks serverless
   .env.sample                    # Example configuration

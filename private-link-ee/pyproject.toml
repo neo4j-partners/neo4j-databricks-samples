@@ -9,6 +9,7 @@ setup-private-link = "neo4j_private_link.setup:main"
 approve-private-link = "neo4j_private_link.approve:main"
 attach-ncc = "neo4j_private_link.attach_ncc:main"
 teardown-private-link = "neo4j_private_link.teardown:main"
+detach-ncc = "neo4j_private_link.detach_ncc:main"
 verify-private-link = "neo4j_private_link.verify:main"
 
 [build-system]

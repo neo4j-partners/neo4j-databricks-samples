@@ -4,7 +4,7 @@
 # Reads Neo4j password from .env and stores it in a Databricks secret scope
 #
 # Usage:
-#   1. Ensure .env has NEO4J_PASSWORD set (run setup-private-link.py --init)
+#   1. Ensure .env has NEO4J_PASSWORD set (run setup-private-link --init)
 #   2. Run: ./setup-secrets.sh [profile] [scope-name]
 #      Examples:
 #        ./setup-secrets.sh                             # Default profile, default scope
@@ -41,7 +41,7 @@ log_info "Using secret scope: $SCOPE_NAME"
 if [[ ! -f "$ENV_FILE" ]]; then
     log_error ".env file not found at $ENV_FILE"
     echo "Run the interactive setup first:"
-    echo "  uv run setup-private-link.py --init"
+    echo "  uv run setup-private-link --init"
     exit 1
 fi
 
@@ -75,7 +75,7 @@ missing=()
 if [[ ${#missing[@]} -gt 0 ]]; then
     log_error "Missing required variables in .env: ${missing[*]}"
     echo "Run the interactive setup to set NEO4J_PASSWORD:"
-    echo "  uv run setup-private-link.py --init"
+    echo "  uv run setup-private-link --init"
     exit 1
 fi
 

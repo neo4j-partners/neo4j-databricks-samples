@@ -33,7 +33,7 @@ This proposal replaces the manual steps with a Bicep template and Python scripts
 
 The ARM templates that power the marketplace deployment are already written in Bicep. The modules live in `marketplace/neo4j-enterprise/modules/` as `network.bicep`, `loadbalancer.bicep`, `vmss.bicep`, and `identity.bicep`. The private link infrastructure belongs in the same language: a Bicep template that declares the internal load balancer, NAT subnet, and Private Link Service as a deployable unit. Azure Resource Manager handles idempotency — running `az deployment group create` with the same template and parameters a second time updates existing resources rather than failing or creating duplicates.
 
-The orchestration layer — discovering marketplace resources, deploying the Bicep template, updating the VMSS, printing next steps — is Python. A shared helper module (`private_link_helpers.py`) provides an `az` CLI wrapper, `.env` loading, and resource discovery that the setup and teardown scripts import. Python provides better error handling and structured output compared to a bash script, and the team already has the pattern established from the validation work.
+The orchestration layer — discovering marketplace resources, deploying the Bicep template, updating the VMSS, printing next steps — is Python. A shared helper module (`src/neo4j_private_link/helpers.py`) provides an `az` CLI wrapper, `.env` loading, and resource discovery that the setup and teardown scripts import. Python provides better error handling and structured output compared to a bash script, and the team already has the pattern established from the validation work.
 
 The one operation Bicep cannot express is updating the existing VMSS to join the internal load balancer's backend pool. That VMSS was created by the marketplace template, and Bicep's `existing` keyword can reference it but not safely modify its network profile without risking a conflict with the marketplace's own template. The setup script handles this single imperative step via `az vmss update`, keeping the Bicep template purely declarative.
 
@@ -66,7 +66,7 @@ The backend pool change is a live networking configuration update. Azure applies
 
 A Bicep template, two Python scripts, and a shared helper module. The Bicep template declares the private link infrastructure. The setup script orchestrates discovery, deployment, and VMSS wiring. The teardown script reverses everything. The shared module provides reusable discovery and CLI logic extracted from the validated `vmss_update_test.py`.
 
-### Shared Module: `private_link_helpers.py`
+### Shared Module: `src/neo4j_private_link/helpers.py`
 
 Provides:
 
@@ -101,11 +101,11 @@ The template accepts parameters that describe the existing marketplace deploymen
 
 The template outputs the Private Link Service resource ID, which the operator uses when creating the NCC private endpoint rule in Databricks.
 
-### Python Script: `setup-private-link.py`
+### Setup Command: `uv run setup-private-link`
 
-Run with `uv run setup-private-link.py`. All configuration comes from `.env` — only `RESOURCE_GROUP` is required; everything else is discovered.
+All configuration comes from `.env` — only `RESOURCE_GROUP` is required; everything else is discovered.
 
-**Phase 1: Discovery.** Imports helpers from `private_link_helpers.py`. Queries the resource group, finds the VMSS by name prefix `vmss-neo4j-`, extracts VNet, subnet, subscription ID, and location from the VMSS network profile. Prints what it found.
+**Phase 1: Discovery.** Imports helpers from `src/neo4j_private_link/helpers.py`. Queries the resource group, finds the VMSS by name prefix `vmss-neo4j-`, extracts VNet, subnet, subscription ID, and location from the VMSS network profile. Prints what it found.
 
 **Phase 2: Bicep deployment.** Runs `az deployment group create` with `private-link.bicep`, passing discovered parameters. Bicep handles idempotency — safe to run multiple times.
 
@@ -118,9 +118,9 @@ Run with `uv run setup-private-link.py`. All configuration comes from `.env` —
 - NCC API curl command pre-filled with values from `.env` (`DATABRICKS_ACCOUNT_ID`, `NCC_ID`, PLS resource ID, `NEO4J_DOMAIN`), with `<TOKEN>` as the only placeholder
 - A sample Python notebook cell ready to paste into Databricks
 
-### Python Script: `teardown-private-link.py`
+### Teardown Command: `uv run teardown-private-link`
 
-Run with `uv run teardown-private-link.py`. Reverses the setup without touching the marketplace deployment:
+Reverses the setup without touching the marketplace deployment:
 
 1. Remove the internal load balancer's backend pool from the VMSS network profile
 2. Update VMSS instances to apply the change
@@ -128,7 +128,7 @@ Run with `uv run teardown-private-link.py`. Reverses the setup without touching 
 4. Delete the internal load balancer (`az network lb delete`)
 5. Delete the NAT subnet (`az network vnet subnet delete`)
 
-Complete cleanup — all three resources created by the Bicep template are removed. `az deployment group delete` only removes deployment metadata, not actual resources, so the teardown script deletes each resource explicitly in dependency order. The script discovers resource names the same way the setup script does: from the resource group via `private_link_helpers.py`.
+Complete cleanup — all three resources created by the Bicep template are removed. `az deployment group delete` only removes deployment metadata, not actual resources, so the teardown script deletes each resource explicitly in dependency order. The script discovers resource names the same way the setup script does: from the resource group via the shared helpers module.
 
 The script does not remove the NCC private endpoint rule in Databricks or the approved connection; those are cleaned up separately in the Databricks account console.
 
@@ -167,7 +167,7 @@ The end-to-end demo follows this sequence:
 
 1. **Deploy Neo4j EE from the Azure Marketplace.** Standard 3-node cluster deployment. Takes approximately 10 minutes.
 
-2. **Run `uv run setup-private-link.py`.** Discovers the marketplace resources, deploys the Bicep template, updates the VMSS. Takes approximately 5 minutes. Outputs the Private Link Service resource ID and next steps.
+2. **Run `uv run setup-private-link`.** Discovers the marketplace resources, deploys the Bicep template, updates the VMSS. Takes approximately 5 minutes. Outputs the Private Link Service resource ID and next steps.
 
 3. **Create the NCC private endpoint rule in Databricks.** Paste the resource ID into the Databricks account console or use the curl command the script prints. Takes 1 minute.
 
@@ -193,7 +193,7 @@ with GraphDatabase.driver(uri, auth=auth) as driver:
 
 The `neo4j://` scheme (not `neo4j+s://`) is correct here because traffic travels over the Azure backbone via Private Link. TLS between the driver and server is optional when the network path is private.
 
-6. **Tear down with `uv run teardown-private-link.py`.** Removes all three private link resources (PLS, internal LB, NAT subnet), leaving the marketplace deployment intact.
+6. **Tear down with `uv run teardown-private-link`.** Removes all three private link resources (PLS, internal LB, NAT subnet), leaving the marketplace deployment intact.
 
 ## Reusability
 
@@ -211,14 +211,19 @@ DNS configuration is also out of scope. The operator must ensure that the domain
 
 ```
 private-link-ee/
-  README.md                    # Quick start and testing guide
-  NCC_EE.md                    # Architecture and manual steps (existing)
-  PRIVATE_LINK.md              # This proposal
-  private-link.bicep           # Bicep template (internal LB, NAT subnet, PLS)
-  private_link_helpers.py      # Shared module: az wrapper, discovery, env loading
-  setup-private-link.py        # Setup script: discover, deploy, wire VMSS
-  teardown-private-link.py     # Teardown script: remove PLS, LB, subnet
-  .env.sample                  # Example configuration
+  README.md                      # Quick start and testing guide
+  NCC_EE.md                      # Architecture and manual steps (existing)
+  PRIVATE_LINK.md                # This proposal
+  private-link.bicep             # Bicep template (internal LB, NAT subnet, PLS)
+  pyproject.toml                 # Package definition and script entry points
+  src/neo4j_private_link/        # Python package
+    helpers.py                   # Shared module: az wrapper, discovery, env loading
+    setup.py                     # Setup: discover, deploy Bicep, wire VMSS
+    approve.py                   # Approve pending private endpoint connections
+    attach_ncc.py                # Attach NCC to a Databricks workspace
+    verify.py                    # Verify resources exist or cleanup is complete
+    teardown.py                  # Teardown: remove PLS, LB, subnet
+  .env.sample                    # Example configuration
 ```
 
 ## Open Questions
@@ -277,7 +282,7 @@ The backend pool change is a live NIC configuration update. Azure does not resta
 
 Implemented four files:
 
-1. **`private_link_helpers.py`** — Shared module extracted from `validation/vmss_update_test.py`. Provides `az()` CLI wrapper, `.env` loading (`load_env`, `require_env`, `optional_env`), and resource discovery (`discover_vmss`, `discover_neo4j_uri`). The `discover_vmss` function now also extracts `subscription_id` from the VMSS resource ID, eliminating the need for manual subscription lookups.
+1. **`src/neo4j_private_link/helpers.py`** — Shared module extracted from `validation/vmss_update_test.py`. Provides `az()` CLI wrapper, `.env` loading (`load_env`, `require_env`, `optional_env`), and resource discovery (`discover_vmss`, `discover_neo4j_uri`). The `discover_vmss` function now also extracts `subscription_id` from the VMSS resource ID, eliminating the need for manual subscription lookups.
 
 2. **`private-link.bicep`** — Bicep template declaring three resources:
    - NAT subnet (`pls-nat-subnet`) with `privateLinkServiceNetworkPolicies: 'Disabled'`
@@ -285,16 +290,16 @@ Implemented four files:
    - Private Link Service (`neo4j-pls`) with visibility `['*']`, no auto-approval, NAT IP on the NAT subnet
    - Outputs: PLS resource ID, PLS name, LB name, backend pool ID
 
-3. **`setup-private-link.py`** — Four-phase setup script: discover (from resource group), deploy Bicep, update VMSS backend pool (idempotent — checks if already added), print structured output with PLS resource ID, next steps, pre-filled curl command, and sample notebook cell. Run with `uv run setup-private-link.py`.
+3. **`src/neo4j_private_link/setup.py`** — Four-phase setup script: discover (from resource group), deploy Bicep, update VMSS backend pool (idempotent — checks if already added), print structured output with PLS resource ID, next steps, pre-filled curl command, and sample notebook cell. Run with `uv run setup-private-link`.
 
-4. **`teardown-private-link.py`** — Teardown script: remove VMSS from backend pool, delete PLS, delete LB, delete NAT subnet. Complete cleanup in dependency order. All deletions use `check=False` for graceful handling of already-deleted resources. Run with `uv run teardown-private-link.py`.
+4. **`src/neo4j_private_link/teardown.py`** — Teardown script: remove VMSS from backend pool, delete PLS, delete LB, delete NAT subnet. Complete cleanup in dependency order. All deletions use `check=False` for graceful handling of already-deleted resources. Run with `uv run teardown-private-link`.
 
 ### Next Step: Phase 4 — Deploy and Test
 
 Deploy the Private Link infrastructure against the live `rk-neo4j-ee-private-link` cluster:
 
-1. Run `uv run setup-private-link.py` to deploy the Bicep template and wire the VMSS
+1. Run `uv run setup-private-link` to deploy the Bicep template and wire the VMSS
 2. Create the NCC private endpoint rule in Databricks using the output curl command
 3. Approve the connection in the Azure portal
 4. Test connectivity from a Databricks serverless notebook
-5. Verify teardown with `uv run teardown-private-link.py`
+5. Verify teardown with `uv run teardown-private-link`
