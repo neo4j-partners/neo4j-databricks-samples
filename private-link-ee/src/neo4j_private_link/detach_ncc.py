@@ -111,10 +111,40 @@ def get_ncc(account_id: str, ncc_id: str, token: str) -> dict:
     return api_request("GET", url, token)
 
 
+def list_nccs(account_id: str, token: str) -> list[dict]:
+    """List all NCCs in the account."""
+    url = f"{BASE_URL}/{account_id}/network-connectivity-configs"
+    response = api_request("GET", url, token)
+    return response.get("items", [])
+
+
 def create_ncc(account_id: str, name: str, region: str, token: str) -> dict:
     """Create a new (empty) NCC."""
     url = f"{BASE_URL}/{account_id}/network-connectivity-configs"
     return api_request("POST", url, token, {"name": name, "region": region})
+
+
+PLACEHOLDER_NAME = "neo4j-ncc-placeholder"
+
+
+def find_or_create_placeholder_ncc(account_id: str, region: str, token: str) -> str:
+    """Find an existing placeholder NCC in the region, or create one.
+
+    Returns the NCC ID of the placeholder.
+    """
+    nccs = list_nccs(account_id, token)
+    for ncc in nccs:
+        if ncc.get("name") == PLACEHOLDER_NAME and ncc.get("region") == region:
+            ncc_id = ncc.get("network_connectivity_config_id", "")
+            if ncc_id:
+                print(f"  Reusing existing placeholder NCC: {ncc_id}")
+                return ncc_id
+
+    print(f"  Creating placeholder NCC in {region}...")
+    placeholder = create_ncc(account_id, PLACEHOLDER_NAME, region, token)
+    placeholder_id = placeholder.get("network_connectivity_config_id", "")
+    print(f"  Created placeholder NCC: {placeholder_id}")
+    return placeholder_id
 
 
 def delete_ncc(account_id: str, ncc_id: str, token: str) -> dict:
@@ -237,8 +267,8 @@ def main():
 
     if current_ncc == ncc_id:
         # The Databricks API does not support unsetting the NCC on a
-        # workspace. The workaround is to create an empty placeholder
-        # NCC and swap the workspace to use it.
+        # workspace. The workaround is to swap in an empty placeholder
+        # NCC. We reuse an existing one if available.
         region = ncc_region or workspace_region
         if not region:
             region = input("  Azure region for placeholder NCC: ").strip()
@@ -246,10 +276,7 @@ def main():
                 print("ERROR: Region is required.")
                 sys.exit(1)
 
-        print(f"  Creating empty placeholder NCC in {region}...")
-        placeholder = create_ncc(account_id, "neo4j-ncc-placeholder", region, token)
-        placeholder_id = placeholder.get("network_connectivity_config_id", "")
-        print(f"  Placeholder NCC: {placeholder_id}")
+        placeholder_id = find_or_create_placeholder_ncc(account_id, region, token)
 
         print(f"  Swapping workspace to placeholder NCC...")
         update_workspace_ncc(account_id, workspace_id, placeholder_id, token)
