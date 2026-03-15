@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """
 Attach an NCC to a Databricks workspace.
 
@@ -10,26 +6,15 @@ Prompts for the workspace ID and attaches the NCC specified in .env
 Account API.
 
 Usage:
-    uv run attach-ncc.py --profile <databricks-cli-profile>
-    uv run attach-ncc.py
-
-Authentication:
-    --profile <name>    Use a Databricks CLI profile from ~/.databrickscfg
-                        to get a token via `databricks auth token`
-    DATABRICKS_ACCOUNT_TOKEN in .env or environment
-    Otherwise, prompts for a token interactively
-
-Configuration comes from .env — requires DATABRICKS_ACCOUNT_ID and NCC_ID.
+    uv run attach-ncc --profile <databricks-cli-profile>
+    uv run attach-ncc
 """
 
 import json
 import subprocess
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from private_link_helpers import load_env, optional_env, require_env
+from neo4j_private_link.helpers import load_env, optional_env, require_env
 
 
 def get_token_from_profile(profile: str) -> str:

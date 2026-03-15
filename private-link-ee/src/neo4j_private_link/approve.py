@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """
 Approve pending Private Link connections for Neo4j Enterprise Edition.
 
@@ -11,17 +7,10 @@ endpoint rule in Databricks — Databricks creates a private endpoint in its
 managed subscription, which appears as a pending connection on your PLS.
 
 Usage:
-    uv run approve-private-link.py
-
-Configuration comes from .env — only RESOURCE_GROUP is required.
+    uv run approve-private-link
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from private_link_helpers import (
+from neo4j_private_link.helpers import (
     approve_pls_connection,
     discover_pls_connections,
     load_env,

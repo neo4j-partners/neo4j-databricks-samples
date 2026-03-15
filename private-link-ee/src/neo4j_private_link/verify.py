@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """
 Verify Private Link infrastructure for Neo4j Enterprise Edition.
 
@@ -9,18 +5,13 @@ Checks that all resources exist and are correctly configured, or confirms
 they have been fully cleaned up after teardown.
 
 Usage:
-    uv run verify-private-link.py           # Verify resources exist
-    uv run verify-private-link.py --cleanup  # Verify resources were removed
-
-Configuration comes from .env — only RESOURCE_GROUP is required.
+    uv run verify-private-link           # Verify resources exist
+    uv run verify-private-link --cleanup  # Verify resources were removed
 """
 
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from private_link_helpers import az, discover_pls_connections, discover_vmss, load_env, require_env
+from neo4j_private_link.helpers import az, discover_pls_connections, discover_vmss, load_env, require_env
 
 
 def check(label: str, passed: bool, detail: str = ""):

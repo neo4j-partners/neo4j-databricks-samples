@@ -1,24 +1,15 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """
 Teardown Private Link for Neo4j Enterprise Edition.
 
-Removes all Private Link infrastructure created by setup-private-link.py:
+Removes all Private Link infrastructure created by setup-private-link:
 Private Link Service, internal load balancer, and NAT subnet. Leaves the
 marketplace deployment intact.
 
 Usage:
-    uv run teardown-private-link.py
+    uv run teardown-private-link
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from private_link_helpers import (
+from neo4j_private_link.helpers import (
     az,
     discover_vmss,
     load_env,

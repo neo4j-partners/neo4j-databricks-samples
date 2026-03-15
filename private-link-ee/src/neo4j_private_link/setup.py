@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """
 Setup Private Link for Neo4j Enterprise Edition.
 
@@ -11,24 +7,19 @@ backend pool.
 
 Usage:
     # First time — interactive setup, discovers resources, writes .env:
-    uv run setup-private-link.py --init
+    uv run setup-private-link --init
 
     # Deploy (reads from .env):
-    uv run setup-private-link.py
-
-Configuration comes from .env — only RESOURCE_GROUP is required.
-Everything else is discovered automatically from the marketplace deployment.
+    uv run setup-private-link
 """
 
 import getpass
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from private_link_helpers import (
+from neo4j_private_link.helpers import (
     BICEP_TEMPLATE,
     ENV_PATH,
+    PROJECT_DIR,
     az,
     discover_neo4j_uri,
     discover_vmss,
@@ -111,8 +102,8 @@ def init_env():
     write_env(values)
     print()
     print("Next steps:")
-    print("  Deploy:   uv run setup-private-link.py")
-    print("  Teardown: uv run teardown-private-link.py")
+    print("  Deploy:   uv run setup-private-link")
+    print("  Teardown: uv run teardown-private-link")
 
 
 # ---------------------------------------------------------------------------
@@ -254,12 +245,12 @@ def print_output(info: dict, deployment: dict):
         "   public DNS; Databricks resolves it internally.",
         "",
         "3. Approve the pending connection",
-        "   Run: uv run approve-private-link.py",
+        "   Run: uv run approve-private-link",
         "   This finds and approves pending connections on the PLS.",
         "   Wait for NCC status to show ESTABLISHED (up to 10 min).",
         "",
         "4. Attach the NCC to your Databricks workspace",
-        "   Run: uv run attach-ncc.py",
+        "   Run: uv run attach-ncc",
         "   Prompts for workspace ID and attaches the NCC via the API.",
         "",
         "5. Test from a Databricks serverless notebook",
@@ -285,7 +276,7 @@ def print_output(info: dict, deployment: dict):
     output = "\n".join(lines)
     print(output)
 
-    output_file = Path(__file__).resolve().parent / "setup-output.txt"
+    output_file = PROJECT_DIR / "setup-output.txt"
     output_file.write_text(output + "\n")
     print(f"\nOutput saved to {output_file}")
 

@@ -2,7 +2,6 @@
 Shared helpers for Neo4j Private Link setup and teardown.
 
 Provides az CLI wrapper, .env loading, and marketplace resource discovery.
-Provides az CLI wrapper, .env loading, and marketplace resource discovery.
 """
 
 import json
@@ -11,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PROJECT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 ENV_PATH = PROJECT_DIR / ".env"
 ENV_SAMPLE_PATH = PROJECT_DIR / ".env.sample"
 BICEP_TEMPLATE = PROJECT_DIR / "private-link.bicep"
@@ -68,7 +67,7 @@ def load_env():
     if not ENV_PATH.exists():
         print(f"ERROR: .env not found at {ENV_PATH}")
         print("  Run with --init to create it interactively:")
-        print("  uv run setup-private-link.py --init")
+        print("  uv run setup-private-link --init")
         sys.exit(1)
 
     print(f"  Loading config from {ENV_PATH}")
