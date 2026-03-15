@@ -2,19 +2,59 @@
 
 Private connectivity from Databricks serverless compute to a self-hosted Neo4j Enterprise Edition cluster on Azure, using Azure Private Link. No public internet, no IP allowlisting.
 
+## What This Does
+
+Databricks serverless compute runs in Databricks-managed infrastructure with no customer-controlled VNet. Neo4j Enterprise Edition runs on VMs inside a customer-managed VNet. Connecting the two without exposing Neo4j to the public internet requires Azure Private Link to route driver traffic entirely over the Azure backbone.
+
+The Neo4j marketplace deployment creates a VMSS, a public load balancer, and a VNet. Everything the database needs to run, but nothing Databricks serverless needs to reach it privately. This project adds three resources to the existing deployment:
+
+1. **Internal Load Balancer** (Standard SKU, forwards Bolt traffic on port 7687 to the Neo4j VMSS)
+2. **NAT Subnet** (dedicated subnet for Private Link Service NAT IP addresses)
+3. **Private Link Service** (exposes the internal LB as a private endpoint target)
+
+A Bicep template declares these resources. Python scripts handle discovery, deployment, VMSS wiring, connection approval, and workspace attachment. The setup script discovers everything it needs from the resource group; no manual ID lookups required.
+
 ```
-Databricks Serverless --> NCC Private Endpoint --> Private Link Service --> Internal Load Balancer --> Neo4j EE VMs
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          Azure Backbone (private)                          │
+│                                                                            │
+│  ┌──────────────────────┐         ┌──────────────────────────────────────┐ │
+│  │ Databricks-managed   │         │ Customer VNet (10.0.0.0/8)          │ │
+│  │                      │         │                                      │ │
+│  │  ┌────────────────┐  │         │  ┌────────────┐    ┌──────────────┐ │ │
+│  │  │  Serverless    │  │         │  │ Private    │    │ NAT Subnet   │ │ │
+│  │  │  Notebook      │──┼────┐    │  │ Link       │    │ 10.1.0.0/24  │ │ │
+│  │  │                │  │    │    │  │ Service    │◄───┤              │ │ │
+│  │  └────────────────┘  │    │    │  │ (neo4j-pls)│    └──────────────┘ │ │
+│  │                      │    │    │  └─────┬──────┘                     │ │
+│  └──────────────────────┘    │    │        │                            │ │
+│                              │    │        ▼                            │ │
+│  ┌──────────────────────┐    │    │  ┌────────────┐    ┌──────────────┐ │ │
+│  │ NCC                  │    │    │  │ Internal   │    │ Neo4j VMSS   │ │ │
+│  │                      │    │    │  │ LB :7687   │───►│              │ │ │
+│  │  ┌────────────────┐  │    │    │  │            │    │  ┌─┐ ┌─┐ ┌─┐│ │ │
+│  │  │ Private        │◄─┼────┘    │  └────────────┘    │  │0│ │1│ │2││ │ │
+│  │  │ Endpoint       │  │         │                    │  └─┘ └─┘ └─┘│ │ │
+│  │  └────────────────┘  │         │  ┌────────────┐    │              │ │ │
+│  │                      │         │  │ Public LB  │───►│  Bolt :7687  │ │ │
+│  └──────────────────────┘         │  │ :7474/7687 │    │  Browser:7474│ │ │
+│                                   │  └────────────┘    └──────────────┘ │ │
+│                                   └──────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Traffic flow: Notebook ──► NCC Private Endpoint ──► Private Link Service
+              ──► Internal LB ──► Neo4j VMSS (port 7687)
 ```
 
 ## Prerequisites
 
-- **Azure CLI** with Bicep support (`az bicep version` — [install](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli))
+- **Azure CLI** with Bicep support (`az bicep version`; [install](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli))
 - **uv** ([install](https://docs.astral.sh/uv/getting-started/installation/))
-- **Databricks CLI** ([install](https://docs.databricks.com/dev-tools/cli/install.html)) — used by `attach-ncc.py` for authentication
-- **Neo4j EE marketplace deployment** — a running 3-node cluster deployed from the [Azure Marketplace](https://azuremarketplace.microsoft.com/en-us/marketplace/apps/neo4j.neo4j-ee)
+- **Databricks CLI** ([install](https://docs.databricks.com/dev-tools/cli/install.html)), used by `attach-ncc.py` and `setup-secrets.sh` for authentication
+- **Neo4j EE marketplace deployment**, a running 3-node cluster deployed from the [Azure Marketplace](https://azuremarketplace.microsoft.com/en-us/marketplace/apps/neo4j.neo4j-ee)
 - **Databricks workspace** in the same Azure region as the Neo4j cluster
-- **Azure permissions** — Contributor on the resource group containing the Neo4j deployment
-- **Databricks permissions** — Account admin (to create NCC private endpoint rules and attach to workspaces)
+- **Azure permissions**: Contributor on the resource group containing the Neo4j deployment
+- **Databricks permissions**: Account admin (to create NCC private endpoint rules and attach to workspaces)
 
 ### Databricks CLI Profile Setup
 
@@ -44,25 +84,30 @@ databricks auth token --profile azure-account-admin
 ```bash
 cd private-link-ee
 
-# 1. Interactive setup — asks for resource group and Neo4j password,
+# 1. Interactive setup: asks for resource group and Neo4j password,
 #    discovers everything else, writes .env
 uv run setup-private-link.py --init
 
 # 2. Deploy Private Link infrastructure
 uv run setup-private-link.py
 
-# 3. Create NCC private endpoint rule in Databricks (see setup output)
+# 3. Verify resources were created
+uv run verify-private-link.py
 
-# 4. Approve the pending connection
+# 4. Create NCC private endpoint rule in Databricks (see setup output)
+
+# 5. Approve the pending connection
 uv run approve-private-link.py
 
-# 5. Attach the NCC to your workspace
+# 6. Attach the NCC to your workspace
 uv run attach-ncc.py --profile azure-account-admin
 
-# 6. Wait for NCC status to show ESTABLISHED, then test from a notebook
+# 7. Store secrets and test from a notebook
+./setup-secrets.sh <databricks-cli-profile>
 
-# 7. When done, tear down
+# 8. When done, tear down
 uv run teardown-private-link.py
+uv run verify-private-link.py --cleanup
 ```
 
 ## Configuration
@@ -80,7 +125,7 @@ Run `uv run setup-private-link.py --init` to create `.env` interactively, or cop
 | `NEO4J_USER` | No | Defaults to `neo4j` |
 | `NEO4J_PASSWORD` | No | Neo4j password (used by `--init` setup) |
 | `DATABRICKS_ACCOUNT_ID` | No | Pre-fills the NCC API curl command in setup output |
-| `NCC_ID` | No | NCC UUID — copy from the browser URL when viewing the NCC in the account console |
+| `NCC_ID` | No | NCC UUID; copy from the browser URL when viewing the NCC in the account console |
 | `NEO4J_DOMAIN` | No | Domain name for the NCC private endpoint rule |
 | `DATABRICKS_WORKSPACE_ID` | No | Workspace ID for `attach-ncc.py` (prompted if not set) |
 | `DATABRICKS_ACCOUNT_TOKEN` | No | Account admin token (prompted if not set) |
@@ -92,7 +137,7 @@ Only `RESOURCE_GROUP` is required. Everything else is discovered automatically o
 ### Step 1: Initialize Environment
 
 ```bash
-# Interactive setup — asks for resource group and Neo4j password,
+# Interactive setup: asks for resource group and Neo4j password,
 # discovers VMSS, VNet, subnet, region, and Neo4j URI automatically
 uv run setup-private-link.py --init
 ```
@@ -112,38 +157,15 @@ uv run setup-private-link.py
 
 The script runs four phases:
 
-1. **Discovery** — finds the VMSS, VNet, subnet, subscription, and region
-2. **Bicep deployment** — creates the NAT subnet, internal load balancer, and Private Link Service
-3. **VMSS update** — adds the VMSS to the internal LB's backend pool
-4. **Output** — prints the Private Link Service resource ID and next steps
+1. **Discovery**: finds the VMSS, VNet, subnet, subscription, and region
+2. **Bicep deployment**: creates the NAT subnet, internal load balancer, and Private Link Service
+3. **VMSS update**: adds the VMSS to the internal LB's backend pool
+4. **Output**: prints the Private Link Service resource ID and next steps
 
-**Verify the Azure resources were created:**
+Verify the resources were created:
 
 ```bash
-# Private Link Service
-az network private-link-service show \
-  --resource-group <your-resource-group> \
-  --name neo4j-pls \
-  --query "{name:name, provisioningState:provisioningState}" -o table
-
-# Internal Load Balancer
-az network lb show \
-  --resource-group <your-resource-group> \
-  --name neo4j-internal-lb \
-  --query "{name:name, sku:sku.name, provisioningState:provisioningState}" -o table
-
-# NAT Subnet
-az network vnet subnet show \
-  --resource-group <your-resource-group> \
-  --vnet-name <your-vnet-name> \
-  --name pls-nat-subnet \
-  --query "{name:name, addressPrefix:addressPrefix, privateLinkServiceNetworkPolicies:privateLinkServiceNetworkPolicies}" -o table
-
-# VMSS backend pool membership (should show 2 pools: public LB + internal LB)
-az vmss show \
-  --resource-group <your-resource-group> \
-  --name <your-vmss-name> \
-  --query "virtualMachineProfile.networkProfile.networkInterfaceConfigurations[0].ipConfigurations[0].loadBalancerBackendAddressPools[].id" -o tsv
+uv run verify-private-link.py
 ```
 
 ### Step 3: Create NCC Private Endpoint Rule
@@ -168,7 +190,7 @@ The script finds pending private endpoint connections on `neo4j-pls` and approve
 
 Wait for the NCC status in Databricks to change to **ESTABLISHED** (up to 10 minutes).
 
-**Note:** The "You don't have access" error in the Azure portal when clicking the private endpoint link is expected — that link points to the Databricks-managed subscription. You don't need access there; the approval happens on your PLS, which this script handles.
+**Note:** The "You don't have access" error in the Azure portal when clicking the private endpoint link is expected. That link points to the Databricks-managed subscription in Microsoft's tenant. You don't need access there; the approval happens on your PLS, which this script handles.
 
 ### Step 5: Attach NCC to Workspace
 
@@ -192,11 +214,11 @@ First, store the Neo4j password in a Databricks secret scope (reads from `.env`)
 
 Then import `neo4j_private_link_test.ipynb` into your Databricks workspace and run it on **serverless** compute. The notebook reads the password from the secret scope and runs TCP and driver connectivity tests.
 
-Uses `neo4j://` (not `neo4j+s://`) — traffic travels over the Azure backbone via Private Link, so TLS is optional.
+Uses `neo4j://` (not `neo4j+s://`) because traffic travels over the Azure backbone via Private Link. TLS between driver and server is optional when the network path is private.
 
 ### Step 7: Verify Idempotency (Optional)
 
-Re-running the setup script should be safe — it skips the VMSS update if the backend pool is already attached, and Bicep handles infrastructure idempotency:
+Re-running the setup script is safe. It skips the VMSS update if the backend pool is already attached, and Bicep handles infrastructure idempotency:
 
 ```bash
 uv run setup-private-link.py
@@ -217,18 +239,10 @@ Removes all three Private Link resources in dependency order:
 
 The Neo4j marketplace deployment is unchanged.
 
-**Verify cleanup:**
+Verify cleanup:
 
 ```bash
-# All three should return "not found" errors
-az network private-link-service show --resource-group <your-resource-group> --name neo4j-pls 2>&1 | head -1
-az network lb show --resource-group <your-resource-group> --name neo4j-internal-lb 2>&1 | head -1
-az network vnet subnet show --resource-group <your-resource-group> --vnet-name <your-vnet-name> --name pls-nat-subnet 2>&1 | head -1
-
-# VMSS should have only 1 backend pool (the public LB)
-az vmss show --resource-group <your-resource-group> --name <your-vmss-name> \
-  --query "length(virtualMachineProfile.networkProfile.networkInterfaceConfigurations[0].ipConfigurations[0].loadBalancerBackendAddressPools)" -o tsv
-# Expected: 1
+uv run verify-private-link.py --cleanup
 ```
 
 **Note:** The NCC private endpoint rule in Databricks is not removed by the teardown script. Delete it manually in the Databricks account console if no longer needed.
@@ -254,28 +268,92 @@ The connection was denied instead of approved. Delete the NCC rule, re-create it
 - Wait 10 minutes after attaching/updating the NCC, then restart serverless compute
 
 **Teardown fails on subnet deletion**
-The NAT subnet can't be deleted while the Private Link Service exists. Ensure Step 3 (PLS deletion) succeeded before Step 5 (subnet deletion). If the PLS deletion timed out, delete it manually: `az network private-link-service delete --resource-group <RG> --name neo4j-pls`
+The NAT subnet can't be deleted while the Private Link Service exists. Ensure PLS deletion succeeded before subnet deletion. If the PLS deletion timed out, delete it manually: `az network private-link-service delete --resource-group <RG> --name neo4j-pls`
+
+**"You don't have access" in Azure portal**
+When clicking the private endpoint link on the PLS connections page, Azure navigates to the Databricks-managed subscription in Microsoft's tenant. This is expected. You don't need access there. Use `uv run approve-private-link.py` to approve from your side.
+
+## Architecture
+
+The private connectivity pattern here is the same one Neo4j Aura VDC uses for its managed service: a Private Link Service in front of the database, with consumers creating private endpoints to reach it. The difference is operational. Aura VDC manages the Private Link infrastructure automatically; with self-hosted Enterprise Edition, these scripts build that layer.
+
+### Network Path
+
+```
+Databricks serverless notebook
+    │
+    │ neo4j://neo4j-ee.private.neo4j.com:7687
+    │
+    ▼
+NCC Private Endpoint (Databricks-managed subscription)
+    │
+    │ Azure Private Link (Azure backbone, no public internet)
+    │
+    ▼
+Private Link Service: neo4j-pls (customer subscription)
+    │
+    │ NAT via pls-nat-subnet (10.1.0.0/24)
+    │
+    ▼
+Internal Load Balancer: neo4j-internal-lb
+    │
+    │ Health probe: TCP 7687, 5s interval, threshold 2
+    │ Load balancing: port 7687, TCP Reset enabled
+    │
+    ▼
+Neo4j VMSS (3 instances)
+    │
+    │ Bolt protocol on port 7687
+    ▼
+```
+
+### How the Pieces Fit Together
+
+The **marketplace deployment** creates the VMSS, public LB, VNet (`10.0.0.0/8`), subnet (`10.0.0.0/16`), NSG, and public IP. The VMSS NIC uses `ipconfig-cluster` with NIC-based backend pool membership.
+
+**This project** adds the internal LB, NAT subnet (`10.1.0.0/24`), and Private Link Service. The setup script adds the VMSS to the internal LB's backend pool via `az vmss update`. This is a live NIC configuration change that does not restart VMs or interrupt Neo4j (validated with 41 connection checks and zero drops).
+
+The **Databricks NCC** creates a private endpoint in the Databricks-managed subscription that connects to the Private Link Service. The domain name in the NCC rule (`neo4j-ee.private.neo4j.com`) is resolved internally by Databricks to the private endpoint IP. It does not need to exist in public DNS.
+
+### Port Usage
+
+| Port | Protocol | Path | Purpose |
+|------|----------|------|---------|
+| 7687 | Bolt | Private Link (internal LB) | Driver connectivity from Databricks |
+| 7474 | HTTP | Public LB | Neo4j Browser / admin |
+| 7473 | HTTPS | Public LB | Neo4j Browser over TLS |
+| 7688 | Bolt Routing | Not exposed | Handled by internal LB |
+
+Only port 7687 traverses Private Link. The public LB and Neo4j Browser remain accessible for cluster administration.
+
+### Security Boundaries
+
+- **Private Link Service visibility** is set to `*` (all subscriptions can request connections), but **auto-approval is disabled**. Every connection requires explicit approval via `approve-private-link.py` or the Azure portal.
+- **No public internet exposure.** Driver traffic from Databricks never leaves the Azure backbone.
+- **Neo4j credentials** are stored in a Databricks secret scope, not in notebook code.
+- **`neo4j://` (not `neo4j+s://`)** is used because the network path is private. TLS between driver and server is optional when traffic doesn't traverse the public internet.
 
 ## File Structure
 
 ```
 private-link-ee/
-  README.md                    # This file
-  NCC_EE.md                    # Architecture and manual steps
-  PRIVATE_LINK.md              # Design proposal and progress log
-  private-link.bicep           # Bicep template (internal LB, NAT subnet, PLS)
-  private_link_helpers.py      # Shared module: az wrapper, discovery, env loading
-  setup-private-link.py        # Setup script: discover, deploy, wire VMSS
-  approve-private-link.py      # Approve pending private endpoint connections
-  attach-ncc.py                # Attach NCC to a Databricks workspace
-  teardown-private-link.py     # Teardown script: remove PLS, LB, subnet
-  setup-secrets.sh             # Store Neo4j credentials in Databricks secrets
-  neo4j_private_link_test.ipynb # Test notebook for Databricks serverless
-  .env.sample                  # Example configuration
+  README.md                      # This file
+  NCC_EE.md                      # Architecture and manual steps
+  PRIVATE_LINK.md                # Design proposal and progress log
+  private-link.bicep             # Bicep template (internal LB, NAT subnet, PLS)
+  private_link_helpers.py        # Shared module: az wrapper, discovery, env loading
+  setup-private-link.py          # Setup: discover, deploy Bicep, wire VMSS
+  approve-private-link.py        # Approve pending private endpoint connections
+  attach-ncc.py                  # Attach NCC to a Databricks workspace
+  verify-private-link.py         # Verify resources exist or cleanup is complete
+  teardown-private-link.py       # Teardown: remove PLS, LB, subnet
+  setup-secrets.sh               # Store Neo4j credentials in Databricks secrets
+  neo4j_private_link_test.ipynb  # Test notebook for Databricks serverless
+  .env.sample                    # Example configuration
 ```
 
 ## References
 
-- [Configure private connectivity to resources in your VNet](https://learn.microsoft.com/en-us/azure/databricks/security/network/serverless-network-security/pl-to-internal-network) — Databricks NCC private endpoints to load balancer-backed resources
-- [What is Azure Private Link Service?](https://learn.microsoft.com/en-us/azure/private-link/private-link-service-overview) — architecture and requirements
-- [Neo4j Azure Resource Manager Templates](https://github.com/neo4j-partners/azure-resource-manager-neo4j) — official marketplace ARM templates
+- [Configure private connectivity to resources in your VNet](https://learn.microsoft.com/en-us/azure/databricks/security/network/serverless-network-security/pl-to-internal-network): Databricks NCC private endpoints to load balancer-backed resources
+- [What is Azure Private Link Service?](https://learn.microsoft.com/en-us/azure/private-link/private-link-service-overview): architecture and requirements
+- [Neo4j Azure Resource Manager Templates](https://github.com/neo4j-partners/azure-resource-manager-neo4j): official marketplace ARM templates
