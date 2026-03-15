@@ -1,9 +1,13 @@
 """
-Remove the Neo4j private endpoint rule from a Databricks NCC.
+Remove the Neo4j private endpoint rule and NCC from a Databricks workspace.
 
-Lists private endpoint rules on the NCC specified in .env
-(DATABRICKS_ACCOUNT_ID, NCC_ID), lets you select which to delete,
-and removes it via the Databricks Account API.
+Detaches the NCC from the workspace (by swapping in an empty placeholder
+NCC), deletes all private endpoint rules on the original NCC, then deletes
+the NCC itself. Requires DATABRICKS_ACCOUNT_ID and NCC_ID in .env.
+
+The Databricks API does not support unsetting the NCC on a workspace, so
+this script creates a temporary empty NCC as a replacement. The empty NCC
+is left in place and can be reused or deleted manually.
 
 Usage:
     uv run detach-ncc --profile <databricks-cli-profile>
@@ -45,6 +49,9 @@ def parse_args() -> str | None:
     return None
 
 
+BASE_URL = "https://accounts.azuredatabricks.net/api/2.0/accounts"
+
+
 def api_request(method: str, url: str, token: str, data: dict | None = None) -> dict | list:
     """Make an authenticated request to the Databricks Account API."""
     cmd = [
@@ -78,12 +85,51 @@ def api_request(method: str, url: str, token: str, data: dict | None = None) -> 
     return response
 
 
+# ---------------------------------------------------------------------------
+# Workspace helpers
+# ---------------------------------------------------------------------------
+
+def get_workspace(account_id: str, workspace_id: str, token: str) -> dict:
+    """Get workspace details."""
+    url = f"{BASE_URL}/{account_id}/workspaces/{workspace_id}"
+    return api_request("GET", url, token)
+
+
+def update_workspace_ncc(account_id: str, workspace_id: str, ncc_id: str, token: str) -> dict:
+    """Attach a different NCC to the workspace."""
+    url = f"{BASE_URL}/{account_id}/workspaces/{workspace_id}"
+    return api_request("PATCH", url, token, {"network_connectivity_config_id": ncc_id})
+
+
+# ---------------------------------------------------------------------------
+# NCC helpers
+# ---------------------------------------------------------------------------
+
+def get_ncc(account_id: str, ncc_id: str, token: str) -> dict:
+    """Get NCC details."""
+    url = f"{BASE_URL}/{account_id}/network-connectivity-configs/{ncc_id}"
+    return api_request("GET", url, token)
+
+
+def create_ncc(account_id: str, name: str, region: str, token: str) -> dict:
+    """Create a new (empty) NCC."""
+    url = f"{BASE_URL}/{account_id}/network-connectivity-configs"
+    return api_request("POST", url, token, {"name": name, "region": region})
+
+
+def delete_ncc(account_id: str, ncc_id: str, token: str) -> dict:
+    """Delete an NCC."""
+    url = f"{BASE_URL}/{account_id}/network-connectivity-configs/{ncc_id}"
+    return api_request("DELETE", url, token)
+
+
+# ---------------------------------------------------------------------------
+# Private endpoint rule helpers
+# ---------------------------------------------------------------------------
+
 def list_rules(account_id: str, ncc_id: str, token: str) -> list[dict]:
     """List all private endpoint rules on the NCC."""
-    url = (
-        f"https://accounts.azuredatabricks.net/api/2.0/accounts/"
-        f"{account_id}/network-connectivity-configs/{ncc_id}/private-endpoint-rules"
-    )
+    url = f"{BASE_URL}/{account_id}/network-connectivity-configs/{ncc_id}/private-endpoint-rules"
     response = api_request("GET", url, token)
     return response.get("items", [])
 
@@ -91,9 +137,8 @@ def list_rules(account_id: str, ncc_id: str, token: str) -> list[dict]:
 def delete_rule(account_id: str, ncc_id: str, rule_id: str, token: str) -> dict:
     """Delete a private endpoint rule from the NCC."""
     url = (
-        f"https://accounts.azuredatabricks.net/api/2.0/accounts/"
-        f"{account_id}/network-connectivity-configs/{ncc_id}/"
-        f"private-endpoint-rules/{rule_id}"
+        f"{BASE_URL}/{account_id}/network-connectivity-configs/"
+        f"{ncc_id}/private-endpoint-rules/{rule_id}"
     )
     return api_request("DELETE", url, token)
 
@@ -119,6 +164,10 @@ def print_rule(i: int, rule: dict):
     print(f"      Status:     {status}")
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
     profile = parse_args()
 
@@ -127,12 +176,20 @@ def main():
     ncc_id = require_env("NCC_ID", "Set NCC_ID in .env")
 
     print("=" * 60)
-    print("REMOVE PRIVATE ENDPOINT RULE FROM NCC")
+    print("DETACH NCC AND REMOVE PRIVATE ENDPOINT RULES")
     print("=" * 60)
     print()
     print(f"  Account ID: {account_id}")
     print(f"  NCC ID:     {ncc_id}")
     print()
+
+    # Get workspace ID
+    workspace_id = optional_env("DATABRICKS_WORKSPACE_ID")
+    if not workspace_id:
+        workspace_id = input("Databricks workspace ID: ").strip()
+    if not workspace_id:
+        print("ERROR: Workspace ID is required.")
+        sys.exit(1)
 
     # Get token
     if profile:
@@ -147,63 +204,115 @@ def main():
         print("ERROR: Token is required.")
         sys.exit(1)
 
-    # List existing rules
-    print("Fetching private endpoint rules...")
-    rules = list_rules(account_id, ncc_id, token)
+    # ---------------------------------------------------------------
+    # Step 1: Get workspace and NCC details
+    # ---------------------------------------------------------------
+    print("Step 1: Get workspace and NCC details")
+    workspace = get_workspace(account_id, workspace_id, token)
+    workspace_name = workspace.get("workspace_name", workspace_id)
+    workspace_region = workspace.get("location", workspace.get("azure_workspace_info", {}).get("region", ""))
+    current_ncc = workspace.get("network_connectivity_config_id", "")
+    print(f"  Workspace:  {workspace_name}")
+    print(f"  Region:     {workspace_region}")
+    print(f"  Current NCC: {current_ncc}")
 
-    if not rules:
-        print("\n  No private endpoint rules found on this NCC.")
-        sys.exit(0)
-
-    print(f"\n  Found {len(rules)} private endpoint rule(s):\n")
-    for i, rule in enumerate(rules, 1):
-        print_rule(i, rule)
-        print()
-
-    # Select rule to delete
-    if len(rules) == 1:
-        choice = input("Delete this rule? [y/N]: ").strip().lower()
+    if current_ncc and current_ncc != ncc_id:
+        print(f"\n  WARNING: Workspace is attached to NCC {current_ncc},")
+        print(f"  not the NCC in .env ({ncc_id}).")
+        choice = input("  Continue anyway? [y/N]: ").strip().lower()
         if choice != "y":
             print("Cancelled.")
             sys.exit(0)
-        selected = rules[0]
+
+    ncc = get_ncc(account_id, ncc_id, token)
+    ncc_name = ncc.get("name", ncc_id)
+    ncc_region = ncc.get("region", "")
+    print(f"  NCC name:   {ncc_name}")
+    print(f"  NCC region: {ncc_region}")
+
+    # ---------------------------------------------------------------
+    # Step 2: Detach NCC from workspace
+    # ---------------------------------------------------------------
+    print(f"\nStep 2: Detach NCC from workspace")
+
+    if current_ncc == ncc_id:
+        # The Databricks API does not support unsetting the NCC on a
+        # workspace. The workaround is to create an empty placeholder
+        # NCC and swap the workspace to use it.
+        region = ncc_region or workspace_region
+        if not region:
+            region = input("  Azure region for placeholder NCC: ").strip()
+            if not region:
+                print("ERROR: Region is required.")
+                sys.exit(1)
+
+        print(f"  Creating empty placeholder NCC in {region}...")
+        placeholder = create_ncc(account_id, "neo4j-ncc-placeholder", region, token)
+        placeholder_id = placeholder.get("network_connectivity_config_id", "")
+        print(f"  Placeholder NCC: {placeholder_id}")
+
+        print(f"  Swapping workspace to placeholder NCC...")
+        update_workspace_ncc(account_id, workspace_id, placeholder_id, token)
+        print(f"  Workspace now uses placeholder NCC.")
+    elif not current_ncc:
+        print("  Workspace has no NCC attached. Skipping detach.")
     else:
-        raw = input(f"Enter rule number to delete [1-{len(rules)}], or 'q' to quit: ").strip()
-        if raw.lower() == "q" or not raw:
-            print("Cancelled.")
-            sys.exit(0)
-        try:
-            idx = int(raw)
-            if idx < 1 or idx > len(rules):
-                raise ValueError
-        except ValueError:
-            print("ERROR: Invalid selection.")
-            sys.exit(1)
-        selected = rules[idx - 1]
+        print(f"  Workspace uses a different NCC ({current_ncc}). Skipping detach.")
 
-    rule_id = selected["private_endpoint_rule_id"]
-    status = selected.get("connection_state", "unknown")
-    print(f"\nDeleting private endpoint rule {rule_id}...")
-    delete_rule(account_id, ncc_id, rule_id, token)
+    # ---------------------------------------------------------------
+    # Step 3: Delete private endpoint rules
+    # ---------------------------------------------------------------
+    print(f"\nStep 3: Delete private endpoint rules from NCC")
 
+    rules = list_rules(account_id, ncc_id, token)
+    had_established = False
+
+    if not rules:
+        print("  No private endpoint rules found.")
+    else:
+        print(f"  Found {len(rules)} rule(s):\n")
+        for i, rule in enumerate(rules, 1):
+            print_rule(i, rule)
+            print()
+
+        for rule in rules:
+            rule_id = rule.get("private_endpoint_rule_id", "")
+            status = rule.get("connection_state", "")
+            if status in ("ESTABLISHED", "REJECTED", "DISCONNECTED"):
+                had_established = True
+            print(f"  Deleting {rule_id}...")
+            delete_rule(account_id, ncc_id, rule_id, token)
+            print(f"  Deleted.")
+
+    # ---------------------------------------------------------------
+    # Step 4: Delete the NCC
+    # ---------------------------------------------------------------
+    print(f"\nStep 4: Delete NCC ({ncc_name})")
+    delete_ncc(account_id, ncc_id, token)
+    print("  NCC deleted.")
+
+    # ---------------------------------------------------------------
+    # Done
+    # ---------------------------------------------------------------
     print()
     print("=" * 60)
     print("DONE")
     print("=" * 60)
     print()
-    print(f"  Private endpoint rule {rule_id} has been deleted.")
+    print(f"  NCC {ncc_name} has been removed from workspace {workspace_name}")
+    print(f"  and deleted along with its private endpoint rules.")
     print()
 
-    if status in ("ESTABLISHED", "REJECTED", "DISCONNECTED"):
-        print("  Note: Because the rule was in ESTABLISHED/REJECTED/DISCONNECTED")
-        print("  state, Databricks may retain the private endpoint on your")
-        print("  Azure resource for up to 7 days before permanently removing it.")
+    if had_established:
+        print("  Note: Rules that were in ESTABLISHED, REJECTED, or DISCONNECTED")
+        print("  state may be retained by Databricks for up to 7 days before")
+        print("  the private endpoint is permanently removed from your Azure")
+        print("  resource.")
         print()
 
-    print("  The NCC is still attached to your workspace. Detaching an NCC")
-    print("  from a workspace is not currently supported by the Databricks")
-    print("  API. If you need to remove it, contact Databricks support or")
-    print("  manage it in the account console.")
+    print("  A placeholder NCC (neo4j-ncc-placeholder) was attached to the")
+    print("  workspace. You can leave it in place or remove it from the")
+    print("  account console if no longer needed.")
     print()
 
 

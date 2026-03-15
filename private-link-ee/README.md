@@ -108,6 +108,9 @@ uv run attach-ncc --profile azure-account-admin
 # 8. When done, tear down
 uv run teardown-private-link
 uv run verify-private-link --cleanup
+
+# 9. Remove the NCC and private endpoint rule from Databricks
+uv run detach-ncc --profile azure-account-admin
 ```
 
 ## Configuration
@@ -245,7 +248,22 @@ Verify cleanup:
 uv run verify-private-link --cleanup
 ```
 
-**Note:** The NCC private endpoint rule in Databricks is not removed by the teardown script. Delete it manually in the Databricks account console if no longer needed.
+### Step 9: Detach NCC from Databricks
+
+```bash
+uv run detach-ncc --profile azure-account-admin
+```
+
+Removes the NCC and its private endpoint rules from the Databricks side. The script:
+
+1. Fetches the workspace to confirm which NCC is attached and determine the region
+2. Creates an empty placeholder NCC in the same region and swaps the workspace to use it (the Databricks API does not support unsetting the NCC, so a swap is required)
+3. Deletes all private endpoint rules from the original NCC
+4. Deletes the original NCC
+
+The placeholder NCC (`neo4j-ncc-placeholder`) is left attached to the workspace. It has no rules and does not affect connectivity. You can leave it in place or remove it from the account console.
+
+**Note:** If the original private endpoint rule was in `ESTABLISHED`, `REJECTED`, or `DISCONNECTED` state, Databricks may retain the private endpoint on your Azure resource for up to 7 days before permanently removing it.
 
 ## Troubleshooting
 
@@ -347,6 +365,7 @@ private-link-ee/
     setup.py                     # Setup: discover, deploy Bicep, wire VMSS
     approve.py                   # Approve pending private endpoint connections
     attach_ncc.py                # Attach NCC to a Databricks workspace
+    detach_ncc.py                # Detach NCC from workspace and delete it
     verify.py                    # Verify resources exist or cleanup is complete
     teardown.py                  # Teardown: remove PLS, LB, subnet
   setup-secrets.sh               # Store Neo4j credentials in Databricks secrets
