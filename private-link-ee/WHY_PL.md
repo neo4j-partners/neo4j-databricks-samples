@@ -14,7 +14,7 @@ IP-based filtering would avoid the Private Link infrastructure by allowlisting D
 
 - **Service Tag CIDR Extraction.** Databricks serverless outbound IPs come from Azure service tags, but these IPs are managed by Databricks and are not stable by default. The CIDR ranges contain too many possible IPs to maintain as a firewall allowlist. Not a viable option.
 
-- **Serverless Compute Firewall (Private Preview, deprecated).** A Private Preview feature that provides a dedicated JSON endpoint with outbound IPs for serverless compute. It is our understanding that this feature is being deprecated.
+- **Serverless Compute Firewall (deprecated).** A Private Preview feature that provides a dedicated JSON endpoint with outbound IPs for serverless compute. It is our understanding that this feature is being deprecated.
 
 - **Stable NAT IPs for Non-Storage Resources (deprecated).** Databricks can provide stable NAT IPs specifically for non-storage use cases like connecting to Neo4j. It is our understanding that this option is also being deprecated.
 
