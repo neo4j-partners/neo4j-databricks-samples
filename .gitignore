@@ -79,3 +79,9 @@ out/
 *.key
 .env.local
 .env.*.local
+
+# Bicep compiled output
+private-link.json
+
+# Script output
+setup-output.txt
