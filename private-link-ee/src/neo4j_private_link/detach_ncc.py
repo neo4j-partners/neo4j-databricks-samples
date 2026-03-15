@@ -145,7 +145,7 @@ def delete_rule(account_id: str, ncc_id: str, rule_id: str, token: str) -> dict:
 
 def print_rule(i: int, rule: dict):
     """Print a single rule in a readable format."""
-    rule_id = rule.get("private_endpoint_rule_id", "unknown")
+    rule_id = rule.get("rule_id", "unknown")
     resource_id = rule.get("resource_id", "unknown")
     group_id = rule.get("group_id", "")
     status = rule.get("connection_state", "unknown")
@@ -276,7 +276,7 @@ def main():
             print()
 
         for rule in rules:
-            rule_id = rule.get("private_endpoint_rule_id", "")
+            rule_id = rule.get("rule_id", "")
             status = rule.get("connection_state", "")
             if status in ("ESTABLISHED", "REJECTED", "DISCONNECTED"):
                 had_established = True
