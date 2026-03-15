@@ -1,24 +1,23 @@
 #!/bin/bash
 #
-# Setup Databricks secrets for Neo4j Aura Agent MCP
-# Reads configuration from .env and creates secrets in Databricks
+# Setup Databricks secrets for Neo4j Private Link connectivity
+# Reads Neo4j password from .env and stores it in a Databricks secret scope
 #
 # Usage:
-#   1. Copy .env.sample to .env and fill in your MCP server URL
+#   1. Ensure .env has NEO4J_PASSWORD set (run setup-private-link.py --init)
 #   2. Run: ./setup-secrets.sh [profile] [scope-name]
 #      Examples:
 #        ./setup-secrets.sh                             # Default profile, default scope
-#        ./setup-secrets.sh DEFAULT                     # Explicit default profile
-#        ./setup-secrets.sh my-profile                  # Custom profile, default scope
-#        ./setup-secrets.sh my-profile my-scope         # Custom profile and scope
+#        ./setup-secrets.sh azure-rk-knight             # Custom profile, default scope
+#        ./setup-secrets.sh azure-rk-knight my-scope    # Custom profile and scope
 #
-# Mapping (.env → Databricks secret):
-#   MCP_SERVER_URL → mcp-server-url
+# Mapping (.env -> Databricks secret):
+#   NEO4J_PASSWORD -> password
 
 set -e
 
 PROFILE="${1:-DEFAULT}"
-SCOPE_NAME="${2:-aura-mcp-secrets}"
+SCOPE_NAME="${2:-neo4j-private-link}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
 
@@ -41,22 +40,22 @@ log_info "Using secret scope: $SCOPE_NAME"
 # Check for .env file
 if [[ ! -f "$ENV_FILE" ]]; then
     log_error ".env file not found at $ENV_FILE"
-    echo "Copy .env.sample to .env and fill in your MCP server URL:"
-    echo "  cp .env.sample .env"
+    echo "Run the interactive setup first:"
+    echo "  uv run setup-private-link.py --init"
     exit 1
 fi
 
 # Check for databricks CLI
 if ! command -v databricks &> /dev/null; then
     log_error "Databricks CLI not found"
-    echo "Install with: pip install databricks-cli"
-    echo "Or: brew install databricks"
+    echo "Install: https://docs.databricks.com/dev-tools/cli/install.html"
     echo ""
-    echo "Then configure with: databricks auth login"
+    echo "Then authenticate:"
+    echo "  databricks auth login --profile $PROFILE"
     exit 1
 fi
 
-# Load .env file (parse manually to handle URLs with & characters)
+# Load .env file
 log_info "Loading configuration from $ENV_FILE"
 while IFS= read -r line || [[ -n "$line" ]]; do
     # Skip comments and blank lines
@@ -71,10 +70,12 @@ done < "$ENV_FILE"
 
 # Validate required variables
 missing=()
-[[ -z "$MCP_SERVER_URL" ]] && missing+=("MCP_SERVER_URL")
+[[ -z "$NEO4J_PASSWORD" ]] && missing+=("NEO4J_PASSWORD")
 
 if [[ ${#missing[@]} -gt 0 ]]; then
     log_error "Missing required variables in .env: ${missing[*]}"
+    echo "Run the interactive setup to set NEO4J_PASSWORD:"
+    echo "  uv run setup-private-link.py --init"
     exit 1
 fi
 
@@ -95,7 +96,7 @@ set_secret() {
 }
 
 # Set secrets
-set_secret "mcp-server-url" "$MCP_SERVER_URL"
+set_secret "password" "$NEO4J_PASSWORD"
 
 log_info "Done! Secrets configured in scope: $SCOPE_NAME"
 echo ""
@@ -108,5 +109,5 @@ $DBX secrets list-secrets "$SCOPE_NAME"
 echo ""
 
 echo "Use in Databricks notebooks:"
-echo "  mcp_url = dbutils.secrets.get(\"$SCOPE_NAME\", \"mcp-server-url\")"
+echo "  password = dbutils.secrets.get(\"$SCOPE_NAME\", \"password\")"
 echo ""

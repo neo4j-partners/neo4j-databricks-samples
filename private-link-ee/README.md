@@ -184,25 +184,15 @@ It may take a few minutes for serverless compute to pick up the NCC.
 
 ### Step 6: Test from Databricks
 
-In a Databricks **serverless** notebook:
+First, store the Neo4j password in a Databricks secret scope (reads from `.env`):
 
-```python
-%pip install neo4j
-
-from neo4j import GraphDatabase
-
-uri = "neo4j://neo4j-ee.private.neo4j.com:7687"
-auth = ("neo4j", "<PASSWORD>")
-
-with GraphDatabase.driver(uri, auth=auth) as driver:
-    driver.verify_connectivity()
-    records, _, _ = driver.execute_query(
-        "RETURN 'Connected over Private Link' AS message"
-    )
-    print(records[0]["message"])
+```bash
+./setup-secrets.sh <databricks-cli-profile>
 ```
 
-Use `neo4j://` (not `neo4j+s://`) — traffic travels over the Azure backbone via Private Link, so TLS is optional.
+Then import `neo4j_private_link_test.ipynb` into your Databricks workspace and run it on **serverless** compute. The notebook reads the password from the secret scope and runs TCP and driver connectivity tests.
+
+Uses `neo4j://` (not `neo4j+s://`) — traffic travels over the Azure backbone via Private Link, so TLS is optional.
 
 ### Step 7: Verify Idempotency (Optional)
 
@@ -279,6 +269,8 @@ private-link-ee/
   approve-private-link.py      # Approve pending private endpoint connections
   attach-ncc.py                # Attach NCC to a Databricks workspace
   teardown-private-link.py     # Teardown script: remove PLS, LB, subnet
+  setup-secrets.sh             # Store Neo4j credentials in Databricks secrets
+  neo4j_private_link_test.ipynb # Test notebook for Databricks serverless
   .env.sample                  # Example configuration
 ```
 
