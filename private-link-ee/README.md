@@ -1,10 +1,14 @@
 # Neo4j EE Private Link for Databricks Serverless
 
-Private connectivity from Databricks serverless compute to a self-hosted Neo4j Enterprise Edition cluster on Azure, using Azure Private Link. This is a very close approximation of the private link setup used by Neo4j Aura VDC, where the managed service handles this infrastructure automatically.
+This demo demonstrates how to connect Databricks serverless compute to a self-hosted Neo4j Enterprise Edition cluster without exposing Neo4j to the public internet, using Azure Private Link. A Databricks serverless notebook connects to the Neo4j cluster over the Bolt protocol (port 7687), routed entirely over the Azure backbone via an NCC private endpoint, Private Link Service, and an internal load balancer. No public internet, no IP allowlisting, no firewall rules between Databricks and Neo4j.
+
+We decided to use this approach because our research found that Databricks serverless compute runs inside Databricks-managed infrastructure with no customer-controlled VNet, no stable outbound IPs, and no direct path to resources in a customer's Azure network. Neo4j Enterprise Edition runs on VMs inside a customer-managed VNet. Azure Private Link is the only way to connect the two privately.
+
+The private connectivity pattern here is the same one that Neo4j Aura VDC uses for its managed service: a Private Link Service in front of the database, with customers creating private endpoints to reach it. The difference is operational. Aura VDC manages the Private Link infrastructure automatically; with self-hosted Enterprise Edition, we build that layer ourselves. From the Databricks notebook's perspective, the connection is identical in both cases.
+
+The public load balancer and Neo4j Browser (port 7474) remain accessible over the internet for cluster administration. Only driver traffic travels the private path.
 
 ## What This Does
-
-Databricks serverless compute runs in Databricks-managed infrastructure with no customer-controlled VNet. Neo4j Enterprise Edition runs on VMs inside a customer-managed VNet. Connecting the two without exposing Neo4j to the public internet requires Azure Private Link to route driver traffic entirely over the Azure backbone.
 
 The Neo4j marketplace deployment creates a VMSS, a public load balancer, and a VNet. This project extends the marketplace deployment to add Private Link for serverless. It adds three resources to the existing deployment:
 
@@ -291,8 +295,6 @@ When clicking the private endpoint link on the PLS connections page, Azure navig
 
 ## Architecture
 
-The private connectivity pattern here is the same one Neo4j Aura VDC uses for its managed service: a Private Link Service in front of the database, with consumers creating private endpoints to reach it. The difference is operational. Aura VDC manages the Private Link infrastructure automatically; with self-hosted Enterprise Edition, these scripts build that layer.
-
 ### Network Path
 
 ```
@@ -331,7 +333,42 @@ The **marketplace deployment** creates the VMSS, public LB, VNet (`10.0.0.0/8`),
 
 The **Databricks NCC** creates a private endpoint in the Databricks-managed subscription that connects to the Private Link Service. The domain name in the NCC rule (`neo4j-ee.private.neo4j.com`) is resolved internally by Databricks to the private endpoint IP. It does not need to exist in public DNS.
 
+### Marketplace Deployment Resources
+
+The ARM template at `neo4j-partners/azure-resource-manager-neo4j` defines the naming conventions the automation discovers. Every resource uses a suffix derived from `uniqueString(resourceGroup().id, deployment().name)`. The VMSS is `vmss-neo4j-{location}-{suffix}`, the VNet `vnet-neo4j-{location}-{suffix}`, the load balancer `lb-neo4j-{location}-{suffix}`. The setup script discovers these by querying the resource group, or the operator can set `VMSS_NAME` in `.env`.
+
+The VNet uses `10.0.0.0/8` with a single subnet at `10.0.0.0/16` named `subnet`. The Private Link NAT subnet fits at `10.1.0.0/24` without conflicts.
+
+Each VMSS instance has one NIC named `nic` with one IP configuration named `ipconfig-cluster`. The IP configuration includes a public IP and, for 3+ node clusters, membership in the public load balancer's backend pool named `backend`. This NIC-based configuration is what Azure Private Link Service requires for its backend pool. The public load balancer is created only when `nodeCount >= 3` and uses Standard SKU with health probes on ports 7474 (HTTP) and 7687 (TCP/Bolt).
+
+### VMSS Backend Pool Update
+
+Adding the internal load balancer's backend pool to the existing VMSS requires `az vmss update` followed by `az vmss update-instances --instance-ids "*"`. The marketplace template sets the VMSS upgrade policy to `Manual`, so `update-instances` is required to propagate the change. This is a live NIC configuration update; Azure applies it without restarting the VM or disrupting the Neo4j process. Tested against a live 3-node cluster: 41 connection checks over the full update cycle, zero connection drops, average latency 714ms.
+
+### Bicep Template
+
+The `private-link.bicep` template accepts parameters describing the existing marketplace deployment and creates three resources.
+
+**Parameters:**
+- `vnetName` — the marketplace VNet (discovered by the setup script)
+- `vnetResourceGroup` — resource group containing the VNet (usually the same group)
+- `neo4jSubnetName` — existing subnet where Neo4j VMs run (default: `subnet`)
+- `plsSubnetPrefix` — address prefix for the Private Link NAT subnet (default: `10.1.0.0/24`)
+- `location` — Azure region (discovered from VMSS)
+
+**Resources created:**
+
+1. **Private Link NAT subnet** (`pls-nat-subnet`). A new subnet in the existing VNet with `privateLinkServiceNetworkPolicies` set to `Disabled`. Azure uses this subnet for NAT IP addresses when proxying traffic through the Private Link Service.
+
+2. **Internal Standard Load Balancer** (`neo4j-internal-lb`). Standard SKU, internal (no public IP), frontend IP in the existing Neo4j subnet. Health probe: TCP on port 7687, 5-second interval, probe threshold of 2 (unhealthy after 10 seconds). Load balancing rule forwards port 7687 with TCP Reset enabled so the Neo4j driver detects closed connections immediately. Idle timeout uses the Azure default of 4 minutes; for production use with long-lived connection pools, increase this and ensure the Neo4j driver's `keep_alive=True` sends keepalives more frequently than the timeout.
+
+3. **Private Link Service** (`neo4j-pls`). Attached to the internal load balancer's frontend IP, using the NAT subnet. Visibility set to `*` (all subscriptions can request connections), but auto-approval is disabled. Every connection requires explicit approval.
+
+The template outputs the Private Link Service resource ID for use when creating the NCC private endpoint rule.
+
 ### Port Usage
+
+The Neo4j port numbering matters because the wrong port behind Private Link means the connection fails silently. The internal load balancer forwards only port 7687; the health probe checks port 7687 via TCP.
 
 | Port | Protocol | Path | Purpose |
 |------|----------|------|---------|
@@ -349,13 +386,16 @@ Only port 7687 traverses Private Link. The public LB and Neo4j Browser remain ac
 - **Neo4j credentials** are stored in a Databricks secret scope, not in notebook code.
 - **`neo4j://` (not `neo4j+s://`)** is used because the network path is private. TLS between driver and server is optional when traffic doesn't traverse the public internet.
 
+### Reusability
+
+The Bicep template is parameterized against the marketplace deployment, not coupled to it. It needs a VNet name, a subnet name, and a region. Those could come from any deployment that puts Neo4j VMs behind a NIC-based VMSS in an Azure VNet: marketplace, custom ARM template, or manual VM deployment. The Python scripts add marketplace-specific discovery logic, but the Bicep template stands alone.
+
 ## File Structure
 
 ```
 private-link-ee/
   README.md                      # This file
   NCC_EE.md                      # Architecture and manual steps
-  PRIVATE_LINK.md                # Design proposal and progress log
   private-link.bicep             # Bicep template (internal LB, NAT subnet, PLS)
   pyproject.toml                 # Package definition and script entry points
   src/neo4j_private_link/        # Python package

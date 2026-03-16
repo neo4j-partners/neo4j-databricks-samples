@@ -2,7 +2,7 @@
 
 The goal of this project was to demonstrate secure connectivity from Databricks serverless compute to Neo4j on Azure using one of two approaches: Azure Private Link or IP-based filtering. Databricks serverless compute runs in Databricks-managed infrastructure with no customer-controlled VNet, which means there is no direct network path to resources in a customer's Azure environment. Any connection to Neo4j must either traverse the public internet (with IP-based filtering) or use Azure Private Link to route traffic over the Azure backbone.
 
-After evaluating both paths, we recommend Private Link.
+Based on our research into Neo4j and Databricks connectivity on Azure, Private Link is the best solution.
 
 ## Private Link Solution
 
@@ -23,6 +23,36 @@ IP-based filtering would avoid the Private Link infrastructure by allowlisting D
 - **Stable NAT IPs for Non-Storage Resources (deprecated).** Databricks can provide stable NAT IPs specifically for non-storage use cases like connecting to Neo4j. It is our understanding that this option is also being deprecated.
 
 - **NCC with Network Security Perimeter (NSP).** NSP only supports Azure-native resources and does not extend to third-party services. Neo4j Aura is not an Azure-native resource, so NSP cannot be used to secure connectivity to it.
+
+## Application Gateway as an Alternative to Private Link
+
+Aura Business Critical uses IP allowlisting rather than Private Link (Private Link is an Aura VDC feature). Without Private Link, it is reasonable to consider Azure Application Gateway as a network intermediary. The idea would look something like this:
+
+```
+Databricks serverless
+    │
+    │ NCC Private Endpoint → App Gateway Private Link
+    ▼
+Azure Application Gateway (static public IP, in a customer VNet)
+    │
+    │ Outbound to Aura BC, public IP allowlisted
+    ▼
+Neo4j Aura Business Critical
+```
+
+This would appear to solve the problem. Application Gateway v2 provides a static public IP and supports Private Link for inbound connections. Databricks serverless could reach the gateway via an NCC private endpoint, and the gateway would forward traffic to Aura BC using its stable public IP, which can be added to the Aura BC allowlist. This sidesteps the problem of Databricks serverless having no stable outbound IPs.
+
+In practice, this approach runs into several issues:
+
+- **Protocol mismatch.** Application Gateway is a Layer 7 HTTP/HTTPS load balancer. Neo4j's Bolt protocol (port 7687) is a binary TCP protocol, not HTTP. Application Gateway v2 has added TCP/TLS proxy support, but Bolt traffic does not benefit from any of the gateway's Layer 7 features. Compatibility with the Neo4j driver's connection lifecycle (routing tables, connection pooling, keep-alives) has not been validated in this configuration.
+
+- **Idle timeout.** Application Gateway Private Link has an idle timeout of approximately 5 minutes (300 seconds). Neo4j driver connections are typically long-lived. If the driver and gateway keep-alive intervals are not tuned precisely, connections will drop silently. The driver may not handle reconnection gracefully through a proxy.
+
+- **Public internet leg.** Traffic from Application Gateway to Aura BC still traverses the public internet. The IP allowlist restricts who can connect, but the data path itself is not private. This may not meet the security or compliance requirements that motivated the private connectivity effort in the first place.
+
+- **Cost and operational overhead.** Application Gateway v2 is a significant resource with its own pricing, subnet requirements, scaling behavior, and operational surface. Managing it purely as a TCP proxy for database traffic adds complexity without the benefits (WAF, URL routing, SSL termination) that justify its cost in typical web application deployments.
+
+The more direct paths are upgrading to Aura VDC, which provides Private Link natively, or deploying Neo4j Enterprise Edition with Private Link infrastructure. This repository demonstrates the latter.
 
 ## Path Forward
 
