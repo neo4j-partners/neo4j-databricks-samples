@@ -1,12 +1,12 @@
 # Neo4j EE Private Link for Databricks Serverless
 
-Private connectivity from Databricks serverless compute to a self-hosted Neo4j Enterprise Edition cluster on Azure, using Azure Private Link. No public internet, no IP allowlisting.
+Private connectivity from Databricks serverless compute to a self-hosted Neo4j Enterprise Edition cluster on Azure, using Azure Private Link. This is a very close approximation of the private link setup used by Neo4j Aura VDC, where the managed service handles this infrastructure automatically.
 
 ## What This Does
 
 Databricks serverless compute runs in Databricks-managed infrastructure with no customer-controlled VNet. Neo4j Enterprise Edition runs on VMs inside a customer-managed VNet. Connecting the two without exposing Neo4j to the public internet requires Azure Private Link to route driver traffic entirely over the Azure backbone.
 
-The Neo4j marketplace deployment creates a VMSS, a public load balancer, and a VNet. Everything the database needs to run, but nothing Databricks serverless needs to reach it privately. This project adds three resources to the existing deployment:
+The Neo4j marketplace deployment creates a VMSS, a public load balancer, and a VNet. This project extends the marketplace deployment to add Private Link for serverless. It adds three resources to the existing deployment:
 
 1. **Internal Load Balancer** (Standard SKU, forwards Bolt traffic on port 7687 to the Neo4j VMSS)
 2. **NAT Subnet** (dedicated subnet for Private Link Service NAT IP addresses)
